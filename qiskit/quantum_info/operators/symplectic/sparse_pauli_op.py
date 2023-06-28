@@ -20,6 +20,7 @@ from collections.abc import Mapping, Sequence
 from numbers import Number
 from typing import Dict, Optional
 from copy import deepcopy
+import warnings
 
 from scipy.sparse import csr_matrix
 
@@ -664,6 +665,13 @@ class SparsePauliOp(LinearOp):
             PauliList.from_symplectic(z, x), coeffs, ignore_pauli_phase=True, copy=False
         )
 
+    def bind(self, parameter_values: Dict, allow_unknown_parameters: bool = False):
+        return SparsePauliOp(
+            self.paulis.copy(),
+            [coeff.bind({p: parameter_values[p] for p in coeff.parameters}) for coeff in self.coeffs.copy()],
+            ignore_pauli_phase=True, copy=False
+        ).simplify()
+
     @staticmethod
     def sum(ops):
         """Sum of SparsePauliOps.
@@ -701,6 +709,20 @@ class SparsePauliOp(LinearOp):
     # ---------------------------------------------------------------------
 
     @staticmethod
+    def _from_parameterized_first_order(obj, sparse=False, basis=None, atol=None, rtol=None):
+        terms = []
+        for parameter in obj.parameters:
+            partial = obj.bind_parameters({parameter: 1.})
+            partial = partial.bind_parameters(np.zeros(partial.num_parameters))
+            terms.append(SparsePauliOp.from_operator(partial,
+                                                     sparse=sparse,
+                                                     basis=basis,
+                                                     atol=atol,
+                                                     rtol=rtol
+                                                     ) * parameter)
+        return sum(terms)
+
+    @staticmethod
     def from_operator(obj, sparse=False, atol=None, rtol=None, basis=None):
         """Construct from an Operator objector.
 
@@ -731,6 +753,15 @@ class SparsePauliOp(LinearOp):
             rtol = SparsePauliOp.rtol
 
         if not isinstance(obj, Operator):
+            if hasattr(obj, 'parameters'):
+                warnings.warn("Binding only to first order")
+                if len(obj.parameters):
+                    return SparsePauliOp._from_parameterized_first_order(obj,
+                                                                         sparse=sparse,
+                                                                         basis=basis,
+                                                                         atol=atol,
+                                                                         rtol=rtol,
+                                                                         )
             obj = Operator(obj)
 
         # Check dimension is N-qubit operator
