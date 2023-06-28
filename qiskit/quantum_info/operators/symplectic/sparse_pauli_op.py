@@ -769,6 +769,9 @@ class SparsePauliOp(LinearOp):
         if num_qubits is None:
             raise QiskitError("Input Operator is not an N-qubit operator.")
         data = obj.data
+        
+        if sparse:
+            data = csr_matrix(data)
 
         if sparse:
             data = csr_matrix(data)
