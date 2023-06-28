@@ -21,6 +21,8 @@ from numbers import Number
 from typing import Dict, Optional
 from copy import deepcopy
 
+from scipy.sparse import csr_matrix
+
 import numpy as np
 import rustworkx as rx
 
@@ -699,7 +701,7 @@ class SparsePauliOp(LinearOp):
     # ---------------------------------------------------------------------
 
     @staticmethod
-    def from_operator(obj, atol=None, rtol=None):
+    def from_operator(obj, sparse=False, atol=None, rtol=None, basis=None):
         """Construct from an Operator objector.
 
         Note that the cost of this construction is exponential as it involves
@@ -707,10 +709,14 @@ class SparsePauliOp(LinearOp):
 
         Args:
             obj (Operator): an N-qubit operator.
+            sparse (bool): Whether or not to compute the coefficients
+                           using sparse matrices
             atol (float): Optional. Absolute tolerance for checking if
                           coefficients are zero (Default: 1e-8).
             rtol (float): Optional. relative tolerance for checking if
                           coefficients are zero (Default: 1e-5).
+            basis (PauliBasis): Optional. If known, basis to compute
+                                coefficients against.
 
         Returns:
             SparsePauliOp: the SparsePauliOp representation of the operator.
@@ -733,6 +739,12 @@ class SparsePauliOp(LinearOp):
             raise QiskitError("Input Operator is not an N-qubit operator.")
         data = obj.data
 
+        if sparse:
+            data = csr_matrix(data)
+
+        if basis is None:
+            basis = pauli_basis(num_qubits)
+
         # Index of non-zero basis elements
         inds = []
         # Non-zero coefficients
@@ -740,9 +752,8 @@ class SparsePauliOp(LinearOp):
         # Non-normalized basis factor
         denom = 2**num_qubits
         # Compute coefficients from basis
-        basis = pauli_basis(num_qubits)
-        for i, mat in enumerate(basis.matrix_iter()):
-            coeff = np.trace(mat.dot(data)) / denom
+        for i, mat in enumerate(basis.matrix_iter(sparse=sparse)):
+            coeff = (mat.dot(data)).trace() / denom
             if not np.isclose(coeff, 0, atol=atol, rtol=rtol):
                 inds.append(i)
                 coeffs.append(coeff)
