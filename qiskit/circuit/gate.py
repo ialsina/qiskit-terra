@@ -15,11 +15,13 @@
 from __future__ import annotations
 from typing import Iterator, Iterable
 import numpy as np
+import warnings
+import inspect
+import re
 
 from qiskit.circuit.parameterexpression import ParameterExpression
 from qiskit.circuit.exceptions import CircuitError
 from .instruction import Instruction
-
 
 class Gate(Instruction):
     """Unitary gate."""
@@ -50,7 +52,10 @@ class Gate(Instruction):
                 exception will be raised when this base class method is called.
         """
         if hasattr(self, "__array__"):
-            return self.__array__(dtype=complex)
+            if not self.params:
+                return self.__array__(dtype=complex)
+            else:
+                return self._execute_symbolic_array()
         raise CircuitError(f"to_matrix not defined for this {type(self)}")
 
     def power(self, exponent: float):
@@ -233,3 +238,30 @@ class Gate(Instruction):
             return parameter.item()
         else:
             raise CircuitError(f"Invalid param type {type(parameter)} for gate {self.name}.")
+    
+    def _execute_symbolic_array(self):
+        warnings.warn("Converting parameterized gate into operator. This is experimental.")
+        array_source = inspect.getsource(self.__array__)
+        findings = re.findall(r'^\s*\S', array_source, flags=re.MULTILINE+re.DOTALL)
+        whitespaces = [len(finding) - 1 for finding in findings]
+        global_indent = min(whitespaces)
+        array_source = "\n".join([line[global_indent:] for line in array_source.split("\n")])
+        array_source = array_source.replace('numpy', 'np')
+        array_source = array_source.replace('math', 'math')
+        target_elements_re = r'math\.([^()]+)\(([^()]+)\)'
+        new_array_source_lines = []
+        for line in array_source.split('\n'):
+            matches = re.findall(target_elements_re, line)
+            if not matches:
+                new_array_source_lines.append(line)
+                continue
+            fun, arg = matches[0]
+            new_line = re.sub(target_elements_re, f'({arg}).{fun}()', line)
+            new_array_source_lines.append(new_line)
+        new_array_source = '\n'.join(new_array_source_lines)
+        new_array_source = re.sub(r'float\(([^()]+)\)', r'\1', new_array_source)
+        l = {}
+        exec(new_array_source, globals(), l)
+        array = l['__array__'](self, dtype=None)
+        
+        return array

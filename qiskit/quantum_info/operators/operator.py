@@ -71,9 +71,14 @@ class Operator(LinearOp):
             single subsystem with dimension specified by the shape of the input.
         """
         op_shape = None
-        if isinstance(data, (list, np.ndarray)):
+        if isinstance(data, list):
+            data = np.asarray(data)
+        if isinstance(data, np.ndarray):
             # Default initialization from list or numpy array matrix
-            self._data = np.asarray(data, dtype=complex)
+            if data.dtype == object:
+                self._data = np.asarray(data, dtype=None)
+            else:
+                self._data = np.asarray(data, dtype=complex)
         elif isinstance(data, (QuantumCircuit, Operation)):
             # If the input is a Terra QuantumCircuit or Operation we
             # perform a simulation to construct the unitary operator.
@@ -454,6 +459,14 @@ class Operator(LinearOp):
         if not isinstance(other, Operator):
             other = Operator(other)
         return self._tensor(other, self)
+    
+    def bind_parameters(self, parameters):
+        return Operator(
+                np.array([
+                    el.bind(parameters) for el in self.to_matrix().flatten()
+                ]).reshape(np.prod(self.output_dims()), np.prod(self.input_dims()))
+            )
+
 
     @classmethod
     def _tensor(cls, a, b):

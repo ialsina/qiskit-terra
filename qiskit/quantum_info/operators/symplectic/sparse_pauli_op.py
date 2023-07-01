@@ -31,6 +31,7 @@ from qiskit._accelerate.sparse_pauli_op import unordered_unique
 from qiskit.circuit.parameter import Parameter
 from qiskit.circuit.parameterexpression import ParameterExpression
 from qiskit.circuit.parametertable import ParameterView
+from qiskit.circuit.parametervector import ParameterVectorElement
 from qiskit.exceptions import QiskitError
 from qiskit.quantum_info.operators.custom_iterator import CustomIterator
 from qiskit.quantum_info.operators.linear_op import LinearOp
@@ -369,7 +370,7 @@ class SparsePauliOp(LinearOp):
         return SparsePauliOp(paulis, coeffs, ignore_pauli_phase=True, copy=False)
 
     def _multiply(self, other):
-        if not isinstance(other, Number):
+        if not isinstance(other, (Number, ParameterVectorElement)):
             raise QiskitError("other is not a number")
         if other == 0:
             # Check edge case that we deleted all Paulis
@@ -412,7 +413,7 @@ class SparsePauliOp(LinearOp):
         # See if the result is an identity
         return (
             val.size == 1
-            and np.isclose(val.coeffs[0], 1.0, atol=atol, rtol=rtol)
+            and _isclose(val.coeffs[0], 1.0, atol=atol, rtol=rtol)
             and not np.any(val.paulis.x)
             and not np.any(val.paulis.z)
         )
@@ -445,10 +446,10 @@ class SparsePauliOp(LinearOp):
                 return complex(sympified) if sympified.is_Number else np.nan
 
             non_zero = np.logical_not(
-                np.isclose([to_complex(x) for x in self.coeffs], 0, atol=atol, rtol=rtol)
+                _isclose([to_complex(x) for x in self.coeffs], 0, atol=atol, rtol=rtol)
             )
         else:
-            non_zero = np.logical_not(np.isclose(self.coeffs, 0, atol=atol, rtol=rtol))
+            non_zero = np.logical_not(_isclose(self.coeffs, 0, atol=atol, rtol=rtol))
         paulis_x = self.paulis.x[non_zero]
         paulis_z = self.paulis.z[non_zero]
         nz_coeffs = self.coeffs[non_zero]
@@ -466,10 +467,10 @@ class SparsePauliOp(LinearOp):
         # Delete zero coefficient rows
         if self.coeffs.dtype == object:
             is_zero = np.array(
-                [np.isclose(to_complex(coeff), 0, atol=atol, rtol=rtol) for coeff in coeffs]
+                [_isclose(to_complex(coeff), 0, atol=atol, rtol=rtol) for coeff in coeffs]
             )
         else:
-            is_zero = np.isclose(coeffs, 0, atol=atol, rtol=rtol)
+            is_zero = _isclose(coeffs, 0, atol=atol, rtol=rtol)
         # Check edge case that we deleted all Paulis
         # In this case we return an identity Pauli with a zero coefficient
         if np.all(is_zero):
@@ -746,6 +747,7 @@ class SparsePauliOp(LinearOp):
         Raises:
             QiskitError: if the input operator is not an N-qubit operator.
         """
+
         # Get default atol and rtol
         if atol is None:
             atol = SparsePauliOp.atol
@@ -754,14 +756,19 @@ class SparsePauliOp(LinearOp):
 
         if not isinstance(obj, Operator):
             if hasattr(obj, 'parameters'):
-                warnings.warn("Binding only to first order")
-                if len(obj.parameters):
-                    return SparsePauliOp._from_parameterized_first_order(obj,
-                                                                         sparse=sparse,
-                                                                         basis=basis,
-                                                                         atol=atol,
-                                                                         rtol=rtol,
-                                                                         )
+                try:
+                    obj = Operator(obj)
+                except TypeError:
+                    warnings.warn("Unable to create parameterized SparsePauliOp. "
+                                  "Binding only to first order"
+                                  )
+                    if len(obj.parameters):
+                            SparsePauliOp._from_parameterized_first_order(obj,
+                                                                        sparse=sparse,
+                                                                        basis=basis,
+                                                                        atol=atol,
+                                                                        rtol=rtol,
+                                                                        )
             obj = Operator(obj)
 
         # Check dimension is N-qubit operator
@@ -788,12 +795,17 @@ class SparsePauliOp(LinearOp):
         # Compute coefficients from basis
         for i, mat in enumerate(basis.matrix_iter(sparse=sparse)):
             coeff = (mat.dot(data)).trace() / denom
-            if not np.isclose(coeff, 0, atol=atol, rtol=rtol):
+        basis = pauli_basis(num_qubits)
+        for i, mat in enumerate(basis.matrix_iter()):
+            coeff = np.trace(mat.dot(data)) / denom
+        for i, mat in enumerate(basis.matrix_iter(sparse=sparse)):
+            coeff = (mat.dot(data)).trace() / denom
+            if not _isclose(coeff, 0, atol=atol, rtol=rtol):
                 inds.append(i)
                 coeffs.append(coeff)
         # Get Non-zero coeff PauliList terms
         paulis = basis[inds]
-        return SparsePauliOp(paulis, coeffs, copy=False)
+        return SparsePauliOp(paulis, coeffs, copy=False).simplify()
 
     @staticmethod
     def from_list(obj, dtype=complex):
@@ -1109,6 +1121,17 @@ class SparsePauliOp(LinearOp):
 
         return None if inplace else bound
 
+def _isclose(a, b, rtol, atol, seed=16, ntries=5):
+    np.random.seed(seed)
+    if hasattr(a, 'parameters'):
+        if a.parameters:
+            return all(np.isclose(complex(a.bind(
+                {param: np.random.random() * 2 * np.pi for param in a.parameters}
+            )), b, rtol=rtol, atol=atol) for _ in range(ntries))
+        else:
+            return np.isclose(a, b, rtol=rtol, atol=atol)
+    else:
+        return np.isclose(a, b, rtol=rtol, atol=atol)
 
 # Update docstrings for API docs
 generate_apidocs(SparsePauliOp)
