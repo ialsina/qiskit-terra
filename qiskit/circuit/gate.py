@@ -52,9 +52,13 @@ class Gate(Instruction):
                 exception will be raised when this base class method is called.
         """
         if hasattr(self, "__array__"):
-            if not self.params:
+            # if not self.params:
+            #     return self.__array__(dtype=complex)
+            # else:
+            #     return self._execute_symbolic_array()
+            try:
                 return self.__array__(dtype=complex)
-            else:
+            except TypeError:
                 return self._execute_symbolic_array()
         raise CircuitError(f"to_matrix not defined for this {type(self)}")
 
@@ -241,27 +245,41 @@ class Gate(Instruction):
     
     def _execute_symbolic_array(self):
         warnings.warn("Converting parameterized gate into operator. This is experimental.")
-        array_source = inspect.getsource(self.__array__)
-        findings = re.findall(r'^\s*\S', array_source, flags=re.MULTILINE+re.DOTALL)
-        whitespaces = [len(finding) - 1 for finding in findings]
-        global_indent = min(whitespaces)
-        array_source = "\n".join([line[global_indent:] for line in array_source.split("\n")])
-        array_source = array_source.replace('numpy', 'np')
-        array_source = array_source.replace('math', 'math')
-        target_elements_re = r'math\.([^()]+)\(([^()]+)\)'
-        new_array_source_lines = []
-        for line in array_source.split('\n'):
-            matches = re.findall(target_elements_re, line)
-            if not matches:
-                new_array_source_lines.append(line)
-                continue
-            fun, arg = matches[0]
-            new_line = re.sub(target_elements_re, f'({arg}).{fun}()', line)
-            new_array_source_lines.append(new_line)
-        new_array_source = '\n'.join(new_array_source_lines)
-        new_array_source = re.sub(r'float\(([^()]+)\)', r'\1', new_array_source)
+        source_code = _edit_gate_source_code(inspect.getsource(self.__array__))
         l = {}
-        exec(new_array_source, globals(), l)
-        array = l['__array__'](self, dtype=None)
-        
+        exec(source_code, globals(), l)
+        try:
+            array = l['__array__'](self, dtype=None)
+        except Exception as e:
+            print(l.keys())
+            raise RuntimeError(
+                f"An error occurred:\n{repr(e)}\nin dynamically generated code\n{source_code}"
+            ) from e
         return array
+
+
+def _edit_gate_source_code(source):
+    # Global dedent
+    # findings = re.findall(r'^\s*(?=\S)', gate_array_source, flags=re.MULTILINE+re.DOTALL)
+    # whitespaces = [len(finding) - 1 for finding in findings]
+    # global_indent = min(whitespaces)
+
+    # Dedent
+    indent = len(re.findall(r'^\s*(?=\S)', source)[0])
+    source = "\n".join([line[indent:] for line in source.split("\n")])
+    # Change numpy -> np (as we are passing the globals from this module)
+    source = re.sub(r'(?<!import )numpy', 'np', source)
+
+    # Wherever it says "math.FUN(ARGUMENT)", replace with (ARGUMENT).FUN()
+    target_elements_re = r'math\.([^()]+)\(([^()]+)\)'
+    new_source_lines = []
+    for line in source.split('\n'):
+        for match in re.findall(target_elements_re, line):
+            fun, arg = match
+            line = re.sub(target_elements_re, f'({arg}).{fun}()', line)
+        new_source_lines.append(line)
+    new_source = '\n'.join(new_source_lines)
+    new_source = re.sub(r'float\(([^()]+)\)', r'\1', new_source)
+    new_source = re.sub(r'exp\(([^()]+)\)', r'(\1).exp()', new_source)
+
+    return new_source
