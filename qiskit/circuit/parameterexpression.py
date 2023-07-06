@@ -15,6 +15,7 @@ ParameterExpression Class to enable creating simple expressions of Parameters.
 
 from __future__ import annotations
 from typing import Callable, Union
+import warnings
 
 import numbers
 import operator
@@ -572,8 +573,80 @@ class ParameterExpression:
             information used in circuit-parameter binding and assignment.
         """
         return self._symbol_expr
+    
+    def prettify(self,
+                 pv_index_as_subscript=None,
+                 subscripts_from_one=None,
+                 trig_abbreviation=None,
+                 subs=None,
+                 inplace=False
+                 ):
+        from sympy import sympify, var, sstr
+        import re
+        if inplace:
+            raise NotImplementedError
+        parameter_re = r"([^\[\]])\[(\d+)\]"
+        symbol_expr = sympify(self._symbol_expr)
+        symbol_expr = symbol_expr.subs(1., 1)
+        parameter_symbols = self._parameter_symbols.copy()
+        parameter_indices = {int(re.findall(parameter_re, str(value))[0][1]): value for value in parameter_symbols.values()}
 
 
+        if subs is None:
+            subs = {}
+        if isinstance(subs, (int, float)):
+            subs = {symbol: subs for symbol in parameter_symbols.values()}
+        if isinstance(subs, list):
+            sorted_parameter_symbols = sorted(list(parameter_symbols.values()), key=lambda x: str(x))
+            subs = {sorted_parameter_symbols[i]: el for i, el in enumerate(subs)}
+        if trig_abbreviation:
+            pv_index_as_subscript = True
+        if subs:
+            if subscripts_from_one:
+                warnings.warn("Substitutions are read BEFORE reindexing (index -> index + 1).")
+            if all(isinstance(key, int) for key in subs.keys()):
+                subs = {parameter_indices[key]: value for key, value in subs.items()}
+            elif all(isinstance(key, type(list(parameter_symbols.values())[0])) for key in subs.keys()):
+                pass
+            else:
+                raise NotImplementedError(
+                    "If passing `subs` as a dict, please, pass keys as int"
+                )
+            for symbol, value in subs.items():
+                symbol_expr = symbol_expr.subs(symbol, value)
+            # for symbol in parameter_symbols.values():
+            #     if not any(str(key) in str(symbol) for key in subs.keys()):
+            #         continue
+            #     for match in re.findall(parameter_re, str(symbol)):
+            #         v, i = match
+            #         repl = subs.get(i)
+            #         if repl is None:
+            #             repl = subs.get(f"{v}[{i}]")
+            #         if repl is not None:
+            #             symbol_expr = symbol_expr.subs(symbol, repl)
+        
+        if pv_index_as_subscript is True:
+            for parameter, symbol in parameter_symbols.items():
+                for match in re.findall(parameter_re, str(symbol)):
+                    v, i = match
+                    if subscripts_from_one:
+                        try:
+                            i = str(int(i) + 1)
+                        except ValueError:
+                            pass
+                    new_symbol = var(re.sub(parameter_re, f'{v}_{i}', str(symbol)))
+                    parameter_symbols[parameter] = new_symbol
+                    symbol_expr = symbol_expr.subs(symbol, new_symbol)
+                    
+        if trig_abbreviation:
+            for symbol in parameter_symbols.values():
+                for fun in ['sin', 'cos']:
+                    nums = "".join(re.findall(r'\d+', str(symbol)))
+                    symbol_expr = symbol_expr.subs(sympify(f'{fun}({symbol}/2)'), var(f'{fun[0]}_{nums}'))
+        
+        return symbol_expr
+
+    
 # Redefine the type so external imports get an evaluated reference; Sphinx needs this to understand
 # the type hints.
 ParameterValueType = Union[ParameterExpression, float]

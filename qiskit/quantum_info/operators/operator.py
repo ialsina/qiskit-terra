@@ -576,6 +576,28 @@ class Operator(LinearOp):
     def to_matrix(self):
         """Convert operator to NumPy matrix."""
         return self.data
+    
+    def prettify(
+            self,
+            pv_index_as_subscript=None,
+            subscripts_from_one=None,
+            trig_abbreviation=None,
+            subs=None,
+        ):
+        from qiskit.circuit.parameterexpression import ParameterExpression
+        return [[el.prettify(
+            pv_index_as_subscript=pv_index_as_subscript,
+            subscripts_from_one=subscripts_from_one,
+            trig_abbreviation=trig_abbreviation,
+            subs=subs,
+        ) if isinstance(el, (ParameterExpression, Operation)) else el for el in row] for row in self.data]
+    
+    def to_sympy_array(self, *args, **kwargs):
+        return np.array(self.prettify(*args, **kwargs))
+    
+    def to_sympy_matrix(self, *args, **kwargs):
+        from sympy import Matrix
+        return Matrix(self.prettify(*args, **kwargs))
 
     @classmethod
     def _einsum_matmul(cls, tensor, mat, indices, shift=0, right_mul=False):
